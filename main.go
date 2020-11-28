@@ -1,9 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,19 +17,77 @@ import (
 )
 
 var api *ubot.AppApi
+var configFile string
+
+type ConfigModel struct {
+	Switches map[string]bool `json:"switches,omitempty"`
+	At       string          `json:"at,omitempty"`
+}
+
+func fetchConfig() ConfigModel {
+	var config ConfigModel
+	configBinary, err := ioutil.ReadFile(configFile)
+	if err != nil {
+		fmt.Println("failed to fetch config:", err)
+		return config
+	}
+	err = json.Unmarshal(configBinary, &config)
+	if err != nil {
+		fmt.Println("failed to parse config:", err)
+	}
+	return config
+}
 
 func goodMorning() {
+	fmt.Println("=== TASK EXECUTED AT", time.Now().UTC().Format(time.RFC3339), "===")
+
+	config := fetchConfig()
+
+	var switchDefault bool
+	var ok bool
+	var sent = make(map[string]bool)
+
+	if switchDefault, ok = config.Switches[""]; !ok {
+		switchDefault = true
+	}
+
 	msg := buildGoodMorningMsg()
 	bots, err := api.GetBotList()
 	if err != nil {
+		fmt.Println("failed to fetch bot list:", err)
 		return
 	}
+
 	for _, bot := range bots {
+		platformID, _ := api.GetPlatformID(bot)
 		groups, err := api.GetGroupList(bot)
 		if err != nil {
 			continue
 		}
+
+		var switchThisPlatform bool
+		if switchThisPlatform, ok = config.Switches[platformID]; !ok {
+			switchThisPlatform = switchDefault
+		}
+
 		for _, group := range groups {
+			var ugid = platformID + group
+			if sent[ugid] {
+				continue
+			} else {
+				sent[ugid] = true
+			}
+
+			var switchThisGroup bool
+			if switchThisGroup, ok = config.Switches[ugid]; !ok {
+				switchThisGroup = switchThisPlatform
+			}
+			if !switchThisGroup {
+				fmt.Println("skip", ugid, "due to switch off")
+				continue
+			}
+			fmt.Println("sending to", ugid)
+
 			_ = api.SendChatMessage(bot, ubot.GroupMsg, group, "", msg)
 			time.Sleep(3 * time.Second)
 		}
@@ -93,10 +154,20 @@ func GetFestivalNameThisYear(month int, day int) string {
 }
 
 func main() {
-	err := ubot.HostApp("GoodMorning", func(e *ubot.AppApi) *ubot.App {
+	executableFile, err := os.Executable()
+	if err != nil {
+		panic(err)
+	}
+	configFile = filepath.Join(filepath.Dir(executableFile), "GoodMorning.ubot.json")
+	config := fetchConfig()
+	err = ubot.HostApp("GoodMorning", func(e *ubot.AppApi) *ubot.App {
 		api = e
 		s := gocron.NewScheduler(time.Local)
-		_, err := s.Every(1).Day().At("08:00").Do(goodMorning)
+		at := config.At
+		if at == "" {
+			at = "08:00"
+		}
+		_, err := s.Every(1).Day().At(at).Do(goodMorning)
 		ubot.AssertNoError(err)
 		s.StartAsync()
 		return &ubot.App{}
