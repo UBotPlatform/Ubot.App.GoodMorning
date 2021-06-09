@@ -118,12 +118,15 @@ func buildGoodMorningMsg() string {
 func GetHitokoto() string {
 	resp, err := http.Get("https://v1.hitokoto.cn/?encode=text")
 	if err != nil {
-		return ""
+		return "<获取失败>"
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "<获取失败>"
+	}
 	data, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return ""
+		return "<获取失败>"
 	}
 	return string(data)
 }
